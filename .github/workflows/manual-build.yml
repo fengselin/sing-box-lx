@@ -14,12 +14,14 @@ permissions:
 
 jobs:
   build:
-    runs-on: ubuntu-latest
+    name: Build Linux ARM64
+    runs-on: ubuntu-24.04
 
     steps:
       - name: Checkout source and all submodules
-        uses: actions/checkout@v4
+        uses: actions/checkout@v5
         with:
+          repository: Leadaxe/sing-box-lx
           ref: ${{ inputs.source_ref }}
           fetch-depth: 0
           submodules: recursive
@@ -29,12 +31,15 @@ jobs:
         shell: bash
         run: |
           set -euo pipefail
+
           toolchain="$(tr -d '[:space:]' < go.version)"
           version="${toolchain#go}"
+
           echo "version=$version" >> "$GITHUB_OUTPUT"
+          echo "Pinned toolchain: $toolchain"
 
       - name: Install pinned Go
-        uses: actions/setup-go@v5
+        uses: actions/setup-go@v6
         with:
           go-version: ${{ steps.toolchain.outputs.version }}
           cache: true
@@ -47,32 +52,45 @@ jobs:
         shell: bash
         run: |
           set -euo pipefail
+
           export GOTOOLCHAIN="$(tr -d '[:space:]' < go.version)"
+
+          TAGS="with_gvisor,with_utls,with_clash_api,badlinkname,tfogo_checklinkname0,with_xhttp"
 
           mkdir -p dist
 
           make -f Makefile.lx lx-build \
-            LX_TAGS="with_xhttp,with_utls,badlinkname,tfogo_checklinkname0" \
+            LX_TAGS="$TAGS" \
             LX_OUTPUT="dist/sing-box"
 
           test -s dist/sing-box
+          chmod +x dist/sing-box
+
           file dist/sing-box
           ls -lh dist/sing-box
-          git rev-parse HEAD > dist/source-commit.txt
 
-      - name: Package
+          git rev-parse HEAD > dist/source-commit.txt
+          printf '%s\n' "$TAGS" > dist/build-tags.txt
+
+      - name: Package and checksum
         shell: bash
         run: |
           set -euo pipefail
+
           cd dist
-          chmod +x sing-box
+
           tar -czf sing-box-lx-linux-arm64-xhttp.tar.gz \
-            sing-box source-commit.txt
+            sing-box \
+            source-commit.txt \
+            build-tags.txt
+
           sha256sum sing-box-lx-linux-arm64-xhttp.tar.gz \
             > sing-box-lx-linux-arm64-xhttp.tar.gz.sha256
 
+          ls -lh sing-box sing-box-lx-linux-arm64-xhttp.tar.gz
+
       - name: Upload artifact
-        uses: actions/upload-artifact@v4
+        uses: actions/upload-artifact@v5
         with:
           name: sing-box-lx-n1-xhttp
           path: |
