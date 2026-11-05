@@ -1,0 +1,82 @@
+name: Build N1 XHTTP
+
+on:
+  workflow_dispatch:
+    inputs:
+      source_ref:
+        description: "源码分支或发布标签"
+        required: true
+        default: "lx"
+        type: string
+
+permissions:
+  contents: read
+
+jobs:
+  build:
+    runs-on: ubuntu-latest
+
+    steps:
+      - name: Checkout source and all submodules
+        uses: actions/checkout@v4
+        with:
+          ref: ${{ inputs.source_ref }}
+          fetch-depth: 0
+          submodules: recursive
+
+      - name: Read pinned Go version
+        id: toolchain
+        shell: bash
+        run: |
+          set -euo pipefail
+          toolchain="$(tr -d '[:space:]' < go.version)"
+          version="${toolchain#go}"
+          echo "version=$version" >> "$GITHUB_OUTPUT"
+
+      - name: Install pinned Go
+        uses: actions/setup-go@v5
+        with:
+          go-version: ${{ steps.toolchain.outputs.version }}
+          cache: true
+
+      - name: Build
+        env:
+          GOOS: linux
+          GOARCH: arm64
+          CGO_ENABLED: "0"
+        shell: bash
+        run: |
+          set -euo pipefail
+          export GOTOOLCHAIN="$(tr -d '[:space:]' < go.version)"
+
+          mkdir -p dist
+
+          make -f Makefile.lx lx-build \
+            LX_TAGS="with_xhttp,with_utls,badlinkname,tfogo_checklinkname0" \
+            LX_OUTPUT="dist/sing-box"
+
+          test -s dist/sing-box
+          file dist/sing-box
+          ls -lh dist/sing-box
+          git rev-parse HEAD > dist/source-commit.txt
+
+      - name: Package
+        shell: bash
+        run: |
+          set -euo pipefail
+          cd dist
+          chmod +x sing-box
+          tar -czf sing-box-lx-linux-arm64-xhttp.tar.gz \
+            sing-box source-commit.txt
+          sha256sum sing-box-lx-linux-arm64-xhttp.tar.gz \
+            > sing-box-lx-linux-arm64-xhttp.tar.gz.sha256
+
+      - name: Upload artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: sing-box-lx-n1-xhttp
+          path: |
+            dist/*.tar.gz
+            dist/*.sha256
+          if-no-files-found: error
+          retention-days: 14
