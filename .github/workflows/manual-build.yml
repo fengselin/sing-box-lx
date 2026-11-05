@@ -90,7 +90,7 @@ jobs:
           ls -lh sing-box sing-box-lx-linux-arm64-xhttp.tar.gz
 
       - name: Upload artifact
-        uses: actions/upload-artifact@v5
+        uses: actions/upload-artifact@v6
         with:
           name: sing-box-lx-n1-xhttp
           path: |
