@@ -4,7 +4,7 @@ on:
   workflow_dispatch:
     inputs:
       source_ref:
-        description: "源码分支或发布标签"
+        description: "源码分支、发布标签或提交 SHA；默认 lx"
         required: true
         default: "lx"
         type: string
@@ -44,6 +44,79 @@ jobs:
           go-version: ${{ steps.toolchain.outputs.version }}
           cache: true
 
+      - name: Inspect source and version generation
+        env:
+          SOURCE_REF: ${{ inputs.source_ref }}
+        shell: bash
+        run: |
+          set -euo pipefail
+
+          export GOTOOLCHAIN="$(tr -d '[:space:]' < go.version)"
+
+          mkdir -p dist
+
+          git rev-parse HEAD > dist/source-commit.txt
+
+          {
+            echo "===== Requested source ====="
+            printf 'Repository: %s\n' "Leadaxe/sing-box-lx"
+            printf 'Requested ref: %s\n' "$SOURCE_REF"
+
+            echo
+            echo "===== Checked-out source commit ====="
+            git log -1 --format='Commit: %H%nDate: %ci%nSubject: %s'
+
+            echo
+            echo "===== Remote lx branch at inspection time ====="
+            if ! git ls-remote origin refs/heads/lx; then
+              echo "WARNING: Unable to query remote lx branch."
+            fi
+
+            echo
+            echo "===== Tags pointing at HEAD ====="
+            git tag --points-at HEAD
+
+            echo
+            echo "===== Git describe ====="
+            git describe --tags --always || true
+
+            echo
+            echo "===== Go toolchain ====="
+            go version
+
+            echo
+            echo "===== Pinned Go version file ====="
+            cat go.version
+
+            echo
+            echo "===== Upstream version file ====="
+            if [[ -f upstream.version ]]; then
+              cat upstream.version
+            else
+              echo "upstream.version not found."
+            fi
+
+            echo
+            echo "===== Version-related Makefile rules ====="
+            grep -nE \
+              'VERSION|LX_BUILD|LDFLAGS|ldflags|lx-version|git describe' \
+              Makefile.lx || true
+
+            echo
+            echo "===== Makefile version target ====="
+            if make -f Makefile.lx lx-version \
+              > dist/make-version.txt 2>&1; then
+              cat dist/make-version.txt
+            else
+              cat dist/make-version.txt
+              echo "WARNING: lx-version failed; inspect Makefile.lx below."
+            fi
+
+            echo
+            echo "===== Full Makefile.lx ====="
+            cat Makefile.lx
+          } 2>&1 | tee dist/source-info.txt
+
       - name: Build
         env:
           GOOS: linux
@@ -58,6 +131,7 @@ jobs:
           TAGS="with_gvisor,with_utls,with_clash_api,badlinkname,tfogo_checklinkname0,with_xhttp"
 
           mkdir -p dist
+          printf '%s\n' "$TAGS" > dist/build-tags.txt
 
           make -f Makefile.lx lx-build \
             LX_TAGS="$TAGS" \
@@ -66,11 +140,15 @@ jobs:
           test -s dist/sing-box
           chmod +x dist/sing-box
 
-          file dist/sing-box
-          ls -lh dist/sing-box
+          {
+            echo "===== Binary file information ====="
+            file dist/sing-box
+            ls -lh dist/sing-box
 
-          git rev-parse HEAD > dist/source-commit.txt
-          printf '%s\n' "$TAGS" > dist/build-tags.txt
+            echo
+            echo "===== Embedded Go build information ====="
+            go version -m dist/sing-box
+          } 2>&1 | tee dist/binary-build-info.txt
 
       - name: Package and checksum
         shell: bash
@@ -79,15 +157,55 @@ jobs:
 
           cd dist
 
+          sha256sum sing-box > sing-box.sha256
+
           tar -czf sing-box-lx-linux-arm64-xhttp.tar.gz \
             sing-box \
+            sing-box.sha256 \
             source-commit.txt \
-            build-tags.txt
+            build-tags.txt \
+            source-info.txt \
+            make-version.txt \
+            binary-build-info.txt
 
           sha256sum sing-box-lx-linux-arm64-xhttp.tar.gz \
             > sing-box-lx-linux-arm64-xhttp.tar.gz.sha256
 
           ls -lh sing-box sing-box-lx-linux-arm64-xhttp.tar.gz
+
+      - name: Write job summary
+        env:
+          SOURCE_REF: ${{ inputs.source_ref }}
+        shell: bash
+        run: |
+          set -euo pipefail
+
+          {
+            echo "## N1 XHTTP build"
+            echo
+            printf -- '- Source repository: `%s`\n' \
+              "Leadaxe/sing-box-lx"
+            printf -- '- Requested ref: `%s`\n' "$SOURCE_REF"
+            printf -- '- Source commit: `%s`\n' \
+              "$(cat dist/source-commit.txt)"
+            printf -- '- Target: `%s`\n' "linux/arm64"
+            printf -- '- CGO: `%s`\n' "disabled"
+            printf -- '- Go: `%s`\n' "$(go version)"
+            printf -- '- Build tags: `%s`\n' \
+              "$(cat dist/build-tags.txt)"
+
+            echo
+            echo "### Makefile version output"
+            echo '```text'
+            cat dist/make-version.txt
+            echo '```'
+
+            echo
+            echo "### Embedded Go build information"
+            echo '```text'
+            cat dist/binary-build-info.txt
+            echo '```'
+          } >> "$GITHUB_STEP_SUMMARY"
 
       - name: Upload artifact
         uses: actions/upload-artifact@v6
